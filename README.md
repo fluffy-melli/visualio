@@ -20,7 +20,7 @@ go version
 다음 PowerShell 명령어를 실행하여 Visualio 소스를 다운로드하고 빌드합니다:
 
 ```ps1
-Invoke-WebRequest -Uri "https://github.com/fluffy-melli/visualio/archive/refs/heads/main.zip" -OutFile "visualio-main.zip"; Expand-Archive -Path "visualio-main.zip" -DestinationPath "." -Force; Remove-Item "visualio-main.zip"; Set-Location "visualio-main"; go build -o visualio.exe .;
+Invoke-WebRequest -Uri "https://github.com/fluffy-melli/visualio/archive/refs/heads/main.zip" -OutFile "visualio-main.zip"; Expand-Archive -Path "visualio-main.zip" -DestinationPath "." -Force; Remove-Item "visualio-main.zip"; Set-Location "visualio-main"; go build -ldflags "-H windowsgui" -o visualio.exe .;
 ```
 
 ---
@@ -53,4 +53,6 @@ image = "C:\\path\\to\\your\\image.png"
 
 ## 종료 방법
 
-프로그램 창을 닫거나 `Alt + F4`로 종료할 수 있습니다.
+```ps1
+taskkill /IM visualio.exe /F
+```
