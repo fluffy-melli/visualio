@@ -91,16 +91,16 @@ func loadStaticImage(hwnd windows.HWND, imageBytes []byte) (*Animator, error) {
 	}, nil
 }
 
-func (a *Animator) GetCurrentImage(do func(image.Image) image.Image) image.Image {
+func (a *Animator) GetCurrentImage(s *Screen, do func(*Screen, image.Image) image.Image) image.Image {
 	if !a.isAnimated {
-		return do(a.staticImage)
+		return do(s, a.staticImage)
 	}
 
 	if len(a.frames) == 0 {
 		return nil
 	}
 
-	return do(a.frames[a.currentFrame])
+	return do(s, a.frames[a.currentFrame])
 }
 
 func (a *Animator) NextFrame() {

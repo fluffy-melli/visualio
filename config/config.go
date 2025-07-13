@@ -1,7 +1,9 @@
 package config
 
 import (
-	"github.com/BurntSushi/toml"
+	"os"
+
+	"github.com/pelletier/go-toml"
 )
 
 type Image struct {
@@ -24,12 +26,27 @@ type Config struct {
 	ImageResize   ImageResize   `toml:"image-resize"`
 }
 
-func LoadConfig(configPath string) (*Config, error) {
+func Load(configPath string) (*Config, error) {
 	var config Config
 
-	if _, err := toml.DecodeFile(configPath, &config); err != nil {
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := toml.Unmarshal(data, &config); err != nil {
 		return nil, err
 	}
 
 	return &config, nil
+}
+
+func Save(configPath string, config *Config) error {
+	data, err := toml.Marshal(config)
+
+	if err != nil {
+		return err
+	}
+
+	return os.WriteFile(configPath, data, 0644)
 }

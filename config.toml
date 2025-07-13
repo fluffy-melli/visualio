@@ -1,13 +1,11 @@
-[image]
 
-source = "example.gif" # or example.png
+[image]
+  source = "example.gif"
 
 [image-position]
-
-x = -500 # or -100 (example)
-y = -460 # or -100 (example)
+  x = 0
+  y = 0
 
 [image-resize]
-
-width  = "50%" # or 750px (example)
-height = "50%" # or 750px (example)
+  height = "50%"
+  width = "50%"

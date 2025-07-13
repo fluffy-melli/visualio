@@ -14,6 +14,10 @@ const (
 	WS_EX_LAYERED     = 0x00080000
 	WS_EX_TRANSPARENT = 0x00000020
 	WS_EX_NOACTIVATE  = 0x08000000
+	WM_LBUTTONDOWN    = 0x0201
+	WM_LBUTTONUP      = 0x0202
+	WM_MBUTTONDOWN    = 0x0207
+	WM_MBUTTONUP      = 0x0208
 
 	SW_SHOW   = 5
 	VK_ESCAPE = 0x1B
@@ -47,6 +51,7 @@ var (
 	procSetWindowPos               = user32.NewProc("SetWindowPos")
 	procGetSystemMetrics           = user32.NewProc("GetSystemMetrics")
 	procInvalidateRect             = user32.NewProc("InvalidateRect")
+	procCreateSolidBrush           = gdi32.NewProc("CreateSolidBrush")
 
 	procCreateCompatibleDC = gdi32.NewProc("CreateCompatibleDC")
 	procCreateDIBSection   = gdi32.NewProc("CreateDIBSection")
@@ -54,6 +59,8 @@ var (
 	procBitBlt             = gdi32.NewProc("BitBlt")
 	procDeleteDC           = gdi32.NewProc("DeleteDC")
 	procDeleteObject       = gdi32.NewProc("DeleteObject")
+	procGetCursorPos       = user32.NewProc("GetCursorPos")
+	procFillRect           = user32.NewProc("FillRect")
 )
 
 type WNDCLASS struct {
