@@ -1,5 +1,5 @@
 
-# Visualio 자동 설치 및 빌드 스크립트
+## visualio 자동 설치 및 빌드 스크립트
 
 이 프로젝트는 Visualio를 자동으로 설치하고 빌드하기 위한 PowerShell 스크립트를 제공합니다.  
 Go 언어가 설치되어 있지 않은 경우 자동으로 설치됩니다.
@@ -32,11 +32,21 @@ image = "C:\\path\\to\\your\\image.png"
 
 ---
 
-## ▶실행 방법
+## 실행 방법
+
+터미널에서 실행하려면:
 
 ```bash
 ./visualio.exe
 ```
+
+또는
+
+```bash
+visualio.exe
+```
+
+파일을 더블클릭해도 실행할 수 있습니다.
 
 ---
 
