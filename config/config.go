@@ -6,6 +6,11 @@ import (
 	"github.com/pelletier/go-toml"
 )
 
+type App struct {
+	Version     string `toml:"version"`
+	UpdateCheck bool   `toml:"update-check"`
+}
+
 type Image struct {
 	Source string `toml:"source"`
 }
@@ -21,6 +26,7 @@ type ImageResize struct {
 }
 
 type Config struct {
+	App           App           `toml:"app"`
 	Image         Image         `toml:"image"`
 	ImagePosition ImagePosition `toml:"image-position"`
 	ImageResize   ImageResize   `toml:"image-resize"`

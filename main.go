@@ -2,22 +2,55 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"image"
 	_ "image/jpeg"
 	_ "image/png"
 
 	"github.com/fluffy-melli/visualio/config"
+	"github.com/fluffy-melli/visualio/log"
+	"github.com/fluffy-melli/visualio/update"
 	"github.com/fluffy-melli/visualio/utils"
 	"github.com/fluffy-melli/visualio/windows"
 )
 
 var ConfigFile = "config.toml"
+var ErrorLogs = "error.log"
 
 func main() {
+	logs := log.NewLogger(ErrorLogs)
+
 	configs, err := config.Load(ConfigFile)
 
 	if err != nil {
-		panic(err)
+		logs.Panic(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	if configs.App.UpdateCheck {
+		githubs := update.NewClient("")
+		release, err := githubs.GetLatestRelease(ctx, "fluffy-melli", "visualio")
+		if err != nil {
+			logs.Panic(fmt.Errorf("failed to check for updates: %w", err))
+		}
+
+		currentVersion := configs.App.Version
+		latestVersion := release.Name
+
+		fmt.Printf("Current version: %s\n", currentVersion)
+		fmt.Printf("Latest version: %s\n", latestVersion)
+
+		if latestVersion != currentVersion {
+			logs.Panic(fmt.Errorf("UPDATE REQUIRED!\n"+
+				"Current version: %s\n"+
+				"Latest version: %s\n"+
+				"Please update to the latest version from: https://github.com/fluffy-melli/visualio/releases/latest",
+				currentVersion, latestVersion))
+		}
+
+		logs.Panic("You are using the latest version!")
 	}
 
 	screen := windows.NewScreen()
@@ -39,12 +72,12 @@ func main() {
 
 		Xunit, found := utils.ExtractNumber(configs.ImageResize.Width)
 		if !found {
-			panic("X resize value not found")
+			logs.Panic("X resize value not found")
 		}
 
 		Yunit, found := utils.ExtractNumber(configs.ImageResize.Height)
 		if !found {
-			panic("Y resize value not found")
+			logs.Panic("Y resize value not found")
 		}
 
 		var newWidth, newHeight int
@@ -74,8 +107,6 @@ func main() {
 	}
 
 	position := make(chan windows.Point)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 
 	screen.Routines = make([]func(s *windows.Screen), 0)
 
@@ -85,6 +116,6 @@ func main() {
 	err = screen.CreateWindow("visualio", configs.Image.Source)
 
 	if err != nil {
-		panic(err)
+		logs.Panic(err)
 	}
 }

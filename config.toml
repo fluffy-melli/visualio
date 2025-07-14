@@ -1,4 +1,8 @@
 
+[app]
+  version = "v0.0.4"
+  update-check = true
+
 [image]
   source = "example.gif"
 

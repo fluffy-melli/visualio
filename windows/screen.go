@@ -56,8 +56,13 @@ func (s *Screen) WindowProc(hwnd windows.HWND, msg uint32, wParam, lParam uintpt
 			procPostQuitMessage.Call(0)
 		}
 		return 0
-	case WM_RBUTTONDOWN, WM_DESTROY:
+	case WM_DESTROY:
 		procPostQuitMessage.Call(0)
+		return 0
+	case WM_RBUTTONDOWN:
+		if s.IsClicked {
+			procPostQuitMessage.Call(0)
+		}
 		return 0
 	case WM_MBUTTONDOWN:
 		s.IsClicked = true
