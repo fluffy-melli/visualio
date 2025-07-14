@@ -49,8 +49,6 @@ func main() {
 				"Please update to the latest version from: https://github.com/fluffy-melli/visualio/releases/latest",
 				currentVersion, latestVersion))
 		}
-
-		logs.Panic("You are using the latest version!")
 	}
 
 	screen := windows.NewScreen()
