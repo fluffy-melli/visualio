@@ -1,4 +1,4 @@
-package windows
+package graphics
 
 import (
 	"bytes"
@@ -9,22 +9,23 @@ import (
 	"os"
 	"time"
 
+	"github.com/fluffy-melli/visualio/constants"
 	"golang.org/x/sys/windows"
 )
 
 type Animator struct {
-	hwnd         windows.HWND
-	frames       []image.Image
-	delays       []int
-	currentFrame int
-	done         chan bool
-	isAnimated   bool
-	staticImage  image.Image
+	hwnd           windows.HWND
+	frames         []image.Image
+	delays         []int
+	currentFrame   int
+	done           chan bool
+	isAnimated     bool
+	staticImage    image.Image
+	isPreprocessed bool
 }
 
 func NewGifAnimator(hwnd windows.HWND, imagePath string) (*Animator, error) {
 	imageBytes, err := os.ReadFile(imagePath)
-
 	if err != nil {
 		return nil, err
 	}
@@ -32,24 +33,23 @@ func NewGifAnimator(hwnd windows.HWND, imagePath string) (*Animator, error) {
 	if len(imageBytes) > 3 && string(imageBytes[:3]) == "GIF" {
 		return loadGifAnimation(hwnd, imageBytes)
 	}
-
 	return loadStaticImage(hwnd, imageBytes)
 }
 
 func loadGifAnimation(hwnd windows.HWND, imageBytes []byte) (*Animator, error) {
 	gifImg, err := gif.DecodeAll(bytes.NewReader(imageBytes))
-
 	if err != nil {
 		return nil, err
 	}
 
 	animator := &Animator{
-		hwnd:         hwnd,
-		frames:       make([]image.Image, len(gifImg.Image)),
-		delays:       make([]int, len(gifImg.Image)),
-		currentFrame: 0,
-		done:         make(chan bool),
-		isAnimated:   true,
+		hwnd:           hwnd,
+		frames:         make([]image.Image, len(gifImg.Image)),
+		delays:         make([]int, len(gifImg.Image)),
+		currentFrame:   0,
+		done:           make(chan bool),
+		isAnimated:     true,
+		isPreprocessed: false,
 	}
 
 	bounds := gifImg.Image[0].Bounds()
@@ -58,8 +58,8 @@ func loadGifAnimation(hwnd windows.HWND, imageBytes []byte) (*Animator, error) {
 	for i, frame := range gifImg.Image {
 		delay := max(gifImg.Delay[i]*10, 20)
 		animator.delays[i] = delay
-		disposal := gif.DisposalNone
 
+		disposal := gif.DisposalNone
 		if i < len(gifImg.Disposal) {
 			disposal = int(gifImg.Disposal[i])
 		}
@@ -73,34 +73,67 @@ func loadGifAnimation(hwnd windows.HWND, imageBytes []byte) (*Animator, error) {
 		draw.Draw(frameImg, bounds, accumulated, bounds.Min, draw.Src)
 		animator.frames[i] = frameImg
 	}
+
 	return animator, nil
 }
 
 func loadStaticImage(hwnd windows.HWND, imageBytes []byte) (*Animator, error) {
 	img, _, err := image.Decode(bytes.NewReader(imageBytes))
-
 	if err != nil {
 		return nil, err
 	}
 
 	return &Animator{
-		hwnd:        hwnd,
-		staticImage: img,
-		isAnimated:  false,
-		done:        make(chan bool),
+		hwnd:           hwnd,
+		staticImage:    img,
+		isAnimated:     false,
+		done:           make(chan bool),
+		isPreprocessed: false,
 	}, nil
 }
 
-func (a *Animator) GetCurrentImage(s *Screen, do func(*Screen, image.Image) image.Image) image.Image {
+func (a *Animator) Preprocess(s *Render, do func(*Render, image.Image) image.Image) {
+	if a.isPreprocessed {
+		return
+	}
+
 	if !a.isAnimated {
-		return do(s, a.staticImage)
+		a.staticImage = do(s, a.staticImage)
+	} else {
+		for i, frame := range a.frames {
+			a.frames[i] = do(s, frame)
+		}
+	}
+
+	a.isPreprocessed = true
+}
+
+func (a *Animator) GetCurrentImage(s *Render, do func(*Render, image.Image) image.Image) image.Image {
+	if !a.isPreprocessed {
+		a.Preprocess(s, do)
+	}
+
+	if !a.isAnimated {
+		return a.staticImage
 	}
 
 	if len(a.frames) == 0 {
 		return nil
 	}
 
-	return do(s, a.frames[a.currentFrame])
+	return a.frames[a.currentFrame]
+}
+
+func (a *Animator) GetCurrentImageRaw() image.Image {
+	if !a.isAnimated {
+		return a.staticImage
+	}
+
+	if len(a.frames) == 0 {
+		return nil
+	}
+
+	return a.frames[a.currentFrame]
 }
 
 func (a *Animator) NextFrame() {
@@ -113,6 +146,7 @@ func (a *Animator) Start() {
 	if !a.isAnimated || len(a.frames) <= 1 {
 		return
 	}
+
 	go func() {
 		for {
 			select {
@@ -123,7 +157,7 @@ func (a *Animator) Start() {
 				time.Sleep(delay)
 				a.NextFrame()
 				if a.hwnd != 0 {
-					procInvalidateRect.Call(uintptr(a.hwnd), 0, 1)
+					constants.ProcInvalidateRect.Call(uintptr(a.hwnd), 0, 1)
 				}
 			}
 		}
@@ -136,4 +170,12 @@ func (a *Animator) Stop() {
 
 func (a *Animator) IsAnimated() bool {
 	return a.isAnimated
+}
+
+func (a *Animator) IsPreprocessed() bool {
+	return a.isPreprocessed
+}
+
+func (a *Animator) ResetPreprocessing() {
+	a.isPreprocessed = false
 }

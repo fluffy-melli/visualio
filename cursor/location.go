@@ -1,27 +1,30 @@
-package windows
+package cursor
 
 import (
 	"context"
 	"time"
 	"unsafe"
+
+	"github.com/fluffy-melli/visualio/constants"
+	"github.com/fluffy-melli/visualio/graphics"
 )
 
-type Point struct {
+type Location struct {
 	X int32
 	Y int32
 }
 
-func CursorPosition() (Point, error) {
-	var pt Point
-	ret, _, err := procGetCursorPos.Call(uintptr(unsafe.Pointer(&pt)))
+func Position() (Location, error) {
+	var pt Location
+	ret, _, err := constants.ProcGetCursorPos.Call(uintptr(unsafe.Pointer(&pt)))
 	if ret == 0 {
 		return pt, err
 	}
 	return pt, nil
 }
 
-func CursorPositionReader(ctx context.Context, out chan<- Point) func(s *Screen) {
-	return func(s *Screen) {
+func PositionReader(ctx context.Context, out chan<- Location) func(s *graphics.Render) {
+	return func(s *graphics.Render) {
 		ticker := time.NewTicker(100 * time.Millisecond)
 		defer ticker.Stop()
 		for {
@@ -29,7 +32,7 @@ func CursorPositionReader(ctx context.Context, out chan<- Point) func(s *Screen)
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				pos, err := CursorPosition()
+				pos, err := Position()
 				if err != nil {
 					panic(err)
 				}
@@ -39,9 +42,9 @@ func CursorPositionReader(ctx context.Context, out chan<- Point) func(s *Screen)
 	}
 }
 
-func CursorDeltaHandler(ctx context.Context, in <-chan Point) func(s *Screen) {
-	return func(s *Screen) {
-		var last Point
+func DeltaHandler(ctx context.Context, in <-chan Location) func(s *graphics.Render) {
+	return func(s *graphics.Render) {
+		var last Location
 		for {
 			select {
 			case <-ctx.Done():

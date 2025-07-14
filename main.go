@@ -8,10 +8,12 @@ import (
 	_ "image/png"
 
 	"github.com/fluffy-melli/visualio/config"
+	"github.com/fluffy-melli/visualio/cursor"
+	"github.com/fluffy-melli/visualio/graphics"
+	"github.com/fluffy-melli/visualio/images"
 	"github.com/fluffy-melli/visualio/log"
 	"github.com/fluffy-melli/visualio/update"
 	"github.com/fluffy-melli/visualio/utils"
-	"github.com/fluffy-melli/visualio/windows"
 )
 
 var ConfigFile = "config.toml"
@@ -51,7 +53,7 @@ func main() {
 		}
 	}
 
-	screen := windows.NewScreen()
+	screen := graphics.NewScreen()
 
 	sx, sy := screen.ScreenSize()
 	if configs.ImagePosition.X < 0 {
@@ -65,7 +67,7 @@ func main() {
 		screen.AY = configs.ImagePosition.Y
 	}
 
-	screen.ProcessImg = func(s *windows.Screen, i image.Image) image.Image {
+	screen.ProcessImg = func(s *graphics.Render, i image.Image) image.Image {
 		bounds := i.Bounds()
 
 		Xunit, found := utils.ExtractNumber(configs.ImageResize.Width)
@@ -92,10 +94,10 @@ func main() {
 			newHeight = int(Yunit.Value)
 		}
 
-		i = utils.Resize(i, newWidth, newHeight)
+		i = images.Resize(i, newWidth, newHeight)
 
 		if s.IsClicked && s.IsInside {
-			i = utils.DrawBorder(i)
+			i = images.DrawBorder(i)
 			configs.ImagePosition.X = s.AX
 			configs.ImagePosition.Y = s.AY
 			config.Save(ConfigFile, configs)
@@ -104,12 +106,12 @@ func main() {
 		return i
 	}
 
-	position := make(chan windows.Point)
+	position := make(chan cursor.Location)
 
-	screen.Routines = make([]func(s *windows.Screen), 0)
+	screen.Routines = make([]func(s *graphics.Render), 0)
 
-	screen.Routines = append(screen.Routines, windows.CursorPositionReader(ctx, position))
-	screen.Routines = append(screen.Routines, windows.CursorDeltaHandler(ctx, position))
+	screen.Routines = append(screen.Routines, cursor.PositionReader(ctx, position))
+	screen.Routines = append(screen.Routines, cursor.DeltaHandler(ctx, position))
 
 	err = screen.CreateWindow("visualio", configs.Image.Source)
 
