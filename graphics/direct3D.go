@@ -54,18 +54,39 @@ type BITMAPINFO struct {
 	bmiColors [1]uint32
 }
 
+type CUSTOM_VERTEX struct {
+	X, Y, Z float32
+	Rhw     float32
+	Color   uint32
+	U, V    float32
+}
+
+const (
+	D3DFVF_XYZRHW  = 0x004
+	D3DFVF_DIFFUSE = 0x040
+	D3DFVF_TEX1    = 0x100
+	CUSTOM_FVF     = D3DFVF_XYZRHW | D3DFVF_DIFFUSE | D3DFVF_TEX1
+)
+
+type RenderState struct {
+	lastTexture       *d3d9.Texture
+	statesInitialized bool
+}
+
 type Render struct {
-	animator    *Animator
-	window      windows.HWND
-	ProcessImg  func(*Render, image.Image) image.Image
-	Routines    []func(*Render)
-	AX, AY      int
-	IsInside    bool
-	IsClicked   bool
-	d3d9Obj     *d3d9.Direct3D
-	device      *d3d9.Device
-	texture     *d3d9.Texture
-	initialized bool
+	animator      *Animator
+	window        windows.HWND
+	Routines      []func(*Render)
+	AX, AY        int
+	IsInside      bool
+	IsClicked     bool
+	d3d9Obj       *d3d9.Direct3D
+	device        *d3d9.Device
+	initialized   bool
+	renderState   *RenderState
+	quadVertices  []CUSTOM_VERTEX
+	OnDownMButton func(*Render)
+	OnUpMButton   func(*Render)
 }
 
 type Rect struct {
@@ -73,14 +94,16 @@ type Rect struct {
 }
 
 func NewScreen() *Render {
-	return &Render{}
+	return &Render{
+		renderState: &RenderState{},
+	}
 }
 
 func (s *Render) CurrentImage() image.Image {
-	if s.animator == nil || s.ProcessImg == nil {
+	if s.animator == nil {
 		return nil
 	}
-	return s.animator.GetCurrentImage(s, s.ProcessImg)
+	return s.animator.GetCurrentImage(s)
 }
 
 func (s *Render) ModuleHandle() windows.Handle {
@@ -135,91 +158,29 @@ func (s *Render) initD3D9() error {
 		}
 	}
 
+	if err := s.createVertexBuffer(); err != nil {
+		return err
+	}
+
+	s.initRenderStates()
 	s.initialized = true
 	return nil
 }
 
-func (s *Render) RenderGPU(x, y int) {
-	if !s.initialized || s.animator == nil || s.device == nil {
-		return
+func (s *Render) createVertexBuffer() error {
+	vertices := []CUSTOM_VERTEX{
+		{X: 0, Y: 0, Z: 0.0, Rhw: 1.0, Color: 0xFFFFFFFF, U: 0.0, V: 0.0},
+		{X: 1, Y: 0, Z: 0.0, Rhw: 1.0, Color: 0xFFFFFFFF, U: 1.0, V: 0.0},
+		{X: 0, Y: 1, Z: 0.0, Rhw: 1.0, Color: 0xFFFFFFFF, U: 0.0, V: 1.0},
+		{X: 1, Y: 1, Z: 0.0, Rhw: 1.0, Color: 0xFFFFFFFF, U: 1.0, V: 1.0},
 	}
 
-	img := s.CurrentImage()
-	if img == nil {
-		return
-	}
-
-	bounds := img.Bounds()
-	rgba := image.NewRGBA(bounds)
-	draw.Draw(rgba, bounds, img, bounds.Min, draw.Over)
-
-	if s.needsTextureUpdate(bounds) {
-		s.updateTexture(rgba)
-		if s.texture == nil {
-			return
-		}
-	} else {
-		s.updateTextureData(rgba)
-	}
-
-	deviceStatusErr := s.device.TestCooperativeLevel()
-
-	if deviceStatusErr != nil {
-		if deviceStatusErr.Code() == d3d9.ERR_DEVICENOTRESET {
-			width, height := s.ScreenSize()
-			pp := d3d9.PRESENT_PARAMETERS{
-				Windowed:               1,
-				SwapEffect:             d3d9.SWAPEFFECT_DISCARD,
-				BackBufferFormat:       d3d9.FMT_UNKNOWN,
-				BackBufferWidth:        uint32(width),
-				BackBufferHeight:       uint32(height),
-				HDeviceWindow:          d3d9.HWND(s.window),
-				EnableAutoDepthStencil: 0,
-				Flags:                  d3d9.PRESENTFLAG_LOCKABLE_BACKBUFFER,
-			}
-			if _, err := s.device.Reset(pp); err != nil {
-				fmt.Println("Device reset failed:", err)
-				s.initialized = false
-				return
-			}
-			fmt.Println("Device reset successfully.")
-		} else {
-			fmt.Println("Other D3D9 device error:", deviceStatusErr)
-			return
-		}
-	}
-	s.device.Clear(nil, d3d9.CLEAR_TARGET, d3d9.ColorRGBA(0, 0, 0, 0), 1.0, 0)
-	if err := s.device.BeginScene(); err != nil {
-		fmt.Println("Failed to begin scene:", err)
-		return
-	}
-
-	s.renderTexturedQuad(x, y, bounds.Dx(), bounds.Dy())
-
-	if err := s.device.EndScene(); err != nil {
-		fmt.Println("Failed to end scene:", err)
-		return
-	}
-
-	s.device.Present(nil, nil, 0, nil)
+	s.quadVertices = vertices
+	return nil
 }
 
-type CUSTOM_VERTEX struct {
-	X, Y, Z float32
-	Rhw     float32
-	Color   uint32
-	U, V    float32
-}
-
-const (
-	D3DFVF_XYZRHW  = 0x004
-	D3DFVF_DIFFUSE = 0x040
-	D3DFVF_TEX1    = 0x100
-	CUSTOM_FVF     = D3DFVF_XYZRHW | D3DFVF_DIFFUSE | D3DFVF_TEX1
-)
-
-func (s *Render) renderTexturedQuad(x, y, width, height int) {
-	if s.texture == nil || s.device == nil {
+func (s *Render) initRenderStates() {
+	if s.renderState.statesInitialized {
 		return
 	}
 
@@ -237,17 +198,91 @@ func (s *Render) renderTexturedQuad(x, y, width, height int) {
 	s.device.SetTextureStageState(0, d3d9.TSS_ALPHAARG2, d3d9.TA_DIFFUSE)
 	s.device.SetSamplerState(0, d3d9.SAMP_MINFILTER, d3d9.TEXF_LINEAR)
 	s.device.SetSamplerState(0, d3d9.SAMP_MAGFILTER, d3d9.TEXF_LINEAR)
+	s.device.SetFVF(CUSTOM_FVF)
 
-	s.device.SetTexture(0, s.texture)
+	s.renderState.statesInitialized = true
+}
 
-	vertices := []CUSTOM_VERTEX{
-		{X: float32(x), Y: float32(y), Z: 0.0, Rhw: 1.0, Color: 0xFFFFFFFF, U: 0.0, V: 0.0},
-		{X: float32(x + width), Y: float32(y), Z: 0.0, Rhw: 1.0, Color: 0xFFFFFFFF, U: 1.0, V: 0.0},
-		{X: float32(x), Y: float32(y + height), Z: 0.0, Rhw: 1.0, Color: 0xFFFFFFFF, U: 0.0, V: 1.0},
-		{X: float32(x + width), Y: float32(y + height), Z: 0.0, Rhw: 1.0, Color: 0xFFFFFFFF, U: 1.0, V: 1.0},
+func (s *Render) setTextureIfChanged(texture *d3d9.Texture) {
+	if s.renderState.lastTexture != texture {
+		s.device.SetTexture(0, texture)
+		s.renderState.lastTexture = texture
+	}
+}
+
+func (s *Render) RenderGPU(x, y int) {
+	if !s.initialized || s.animator == nil || s.device == nil {
+		return
 	}
 
-	s.device.SetFVF(CUSTOM_FVF)
+	deviceStatusErr := s.device.TestCooperativeLevel()
+	if deviceStatusErr != nil {
+		if deviceStatusErr.Code() == d3d9.ERR_DEVICENOTRESET {
+			s.resetDevice()
+			return
+		} else {
+			fmt.Println("D3D9 device error:", deviceStatusErr)
+			return
+		}
+	}
+
+	s.device.Clear(nil, d3d9.CLEAR_TARGET, d3d9.ColorRGBA(0, 0, 0, 0), 1.0, 0)
+
+	if err := s.device.BeginScene(); err != nil {
+		fmt.Println("Failed to begin scene:", err)
+		return
+	}
+
+	currentTexture := s.animator.GetCurrentTexture()
+	if currentTexture != nil {
+		bounds := s.animator.GetCurrentBounds()
+		s.renderTexturedQuadOptimized(x, y, bounds.Dx(), bounds.Dy(), currentTexture)
+	}
+
+	if err := s.device.EndScene(); err != nil {
+		fmt.Println("Failed to end scene:", err)
+		return
+	}
+
+	s.device.Present(nil, nil, 0, nil)
+}
+
+func (s *Render) resetDevice() {
+	width, height := s.ScreenSize()
+	pp := d3d9.PRESENT_PARAMETERS{
+		Windowed:               1,
+		SwapEffect:             d3d9.SWAPEFFECT_DISCARD,
+		BackBufferFormat:       d3d9.FMT_UNKNOWN,
+		BackBufferWidth:        uint32(width),
+		BackBufferHeight:       uint32(height),
+		HDeviceWindow:          d3d9.HWND(s.window),
+		EnableAutoDepthStencil: 0,
+		Flags:                  d3d9.PRESENTFLAG_LOCKABLE_BACKBUFFER,
+	}
+
+	if _, err := s.device.Reset(pp); err != nil {
+		fmt.Println("Device reset failed:", err)
+		s.initialized = false
+		return
+	}
+
+	s.renderState.statesInitialized = false
+	s.initRenderStates()
+	fmt.Println("Device reset successfully.")
+}
+
+func (s *Render) renderTexturedQuadOptimized(x, y, width, height int, texture *d3d9.Texture) {
+	if texture == nil {
+		return
+	}
+
+	s.setTextureIfChanged(texture)
+
+	vertices := make([]CUSTOM_VERTEX, 4)
+	vertices[0] = CUSTOM_VERTEX{X: float32(x), Y: float32(y), Z: 0.0, Rhw: 1.0, Color: 0xFFFFFFFF, U: 0.0, V: 0.0}
+	vertices[1] = CUSTOM_VERTEX{X: float32(x + width), Y: float32(y), Z: 0.0, Rhw: 1.0, Color: 0xFFFFFFFF, U: 1.0, V: 0.0}
+	vertices[2] = CUSTOM_VERTEX{X: float32(x), Y: float32(y + height), Z: 0.0, Rhw: 1.0, Color: 0xFFFFFFFF, U: 0.0, V: 1.0}
+	vertices[3] = CUSTOM_VERTEX{X: float32(x + width), Y: float32(y + height), Z: 0.0, Rhw: 1.0, Color: 0xFFFFFFFF, U: 1.0, V: 1.0}
 
 	s.device.DrawPrimitiveUP(
 		d3d9.PT_TRIANGLESTRIP,
@@ -255,87 +290,6 @@ func (s *Render) renderTexturedQuad(x, y, width, height int) {
 		uintptr(unsafe.Pointer(&vertices[0])),
 		uint(unsafe.Sizeof(CUSTOM_VERTEX{})),
 	)
-}
-
-func (s *Render) needsTextureUpdate(bounds image.Rectangle) bool {
-	if s.texture == nil {
-		return true
-	}
-	desc, err := s.texture.GetLevelDesc(0)
-	if err != nil {
-		return true
-	}
-	return desc.Width != uint32(bounds.Dx()) || desc.Height != uint32(bounds.Dy())
-}
-
-func (s *Render) updateTexture(rgba *image.RGBA) {
-	if s.texture != nil {
-		s.texture.Release()
-	}
-
-	bounds := rgba.Bounds()
-	width, height := bounds.Dx(), bounds.Dy()
-
-	var err error
-	s.texture, err = s.device.CreateTexture(
-		uint(width),
-		uint(height),
-		1,
-		d3d9.USAGE_DYNAMIC,
-		d3d9.FMT_A8R8G8B8,
-		d3d9.POOL_DEFAULT,
-		0,
-	)
-	if err != nil {
-		return
-	}
-
-	s.updateTextureData(rgba)
-}
-
-func (s *Render) updateTextureData(rgba *image.RGBA) {
-	if s.texture == nil {
-		return
-	}
-
-	bounds := rgba.Bounds()
-	width, height := bounds.Dx(), bounds.Dy()
-
-	lockedRect, err := s.texture.LockRect(0, nil, d3d9.LOCK_DISCARD)
-	if err != nil {
-		return
-	}
-
-	pitch := int(lockedRect.Pitch)
-	pixels := (*[1 << 30]byte)(unsafe.Pointer(lockedRect.PBits))
-
-	for y := 0; y < height; y++ {
-		for x := 0; x < width; x++ {
-			srcIdx := (y*width + x) * 4
-			dstIdx := y*pitch + x*4
-
-			if srcIdx+3 < len(rgba.Pix) && dstIdx+3 < len(pixels) {
-				a := rgba.Pix[srcIdx+3]
-				r := rgba.Pix[srcIdx+0]
-				g := rgba.Pix[srcIdx+1]
-				b := rgba.Pix[srcIdx+2]
-
-				if a == 0 {
-					pixels[dstIdx+0] = 0
-					pixels[dstIdx+1] = 0
-					pixels[dstIdx+2] = 0
-					pixels[dstIdx+3] = 0
-				} else {
-					pixels[dstIdx+0] = b
-					pixels[dstIdx+1] = g
-					pixels[dstIdx+2] = r
-					pixels[dstIdx+3] = a
-				}
-			}
-		}
-	}
-
-	s.texture.UnlockRect(0)
 }
 
 func (s *Render) WindowProc(hwnd windows.HWND, msg uint32, wParam, lParam uintptr) uintptr {
@@ -362,9 +316,11 @@ func (s *Render) WindowProc(hwnd windows.HWND, msg uint32, wParam, lParam uintpt
 		}
 		return 0
 	case constants.WM_MBUTTONDOWN:
+		s.OnDownMButton(s)
 		s.IsClicked = true
 		return 0
 	case constants.WM_MBUTTONUP:
+		s.OnUpMButton(s)
 		s.IsClicked = false
 		return 0
 	}
@@ -448,7 +404,7 @@ func (s *Render) Render(x, y int) {
 	}
 	defer constants.ProcDeleteObject.Call(hBitmap)
 
-	pixels := (*[1 << 30]byte)(unsafe.Pointer(pixelPtr))[:len(rgba.Pix)]
+	pixels := make([]byte, len(rgba.Pix))
 	for i := 0; i < len(rgba.Pix); i += 4 {
 		a := rgba.Pix[i+3]
 		if a == 0 {
@@ -473,7 +429,7 @@ func (s *Render) CreateWindow(className, imagePath string) error {
 	defer runtime.UnlockOSThread()
 
 	var err error
-	s.animator, err = NewGifAnimator(s.window, imagePath)
+	s.animator, err = NewGPUAnimator(s.device, imagePath)
 	if err != nil {
 		return err
 	}
@@ -506,6 +462,8 @@ func (s *Render) CreateWindow(className, imagePath string) error {
 		s.initialized = false
 	}
 
+	s.animator.SetDevice(s.device)
+
 	constants.ProcSetWindowPos.Call(uintptr(s.window), ^uintptr(0), 0, 0, 0, 0, 0x0001|0x0002|0x0010)
 	constants.ProcSetLayeredWindowAttributes.Call(uintptr(s.window), constants.TRANSPARENT_COLOR, 255, constants.LWA_COLORKEY|constants.LWA_ALPHA)
 	constants.ProcShowWindow.Call(uintptr(s.window), constants.SW_SHOW)
@@ -536,9 +494,8 @@ func (s *Render) RunRoutines() {
 }
 
 func (s *Render) cleanup() {
-	if s.texture != nil {
-		s.texture.Release()
-		s.texture = nil
+	if s.animator != nil {
+		s.animator.Cleanup()
 	}
 	if s.device != nil {
 		s.device.Release()

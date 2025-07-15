@@ -8,48 +8,56 @@ import (
 	"image/gif"
 	"os"
 	"time"
+	"unsafe"
 
 	"github.com/fluffy-melli/visualio/constants"
+	"github.com/gonutz/d3d9"
 	"golang.org/x/sys/windows"
 )
 
 type Animator struct {
 	hwnd           windows.HWND
+	device         *d3d9.Device
+	textures       []*d3d9.Texture
 	frames         []image.Image
 	delays         []int
 	currentFrame   int
 	done           chan bool
 	isAnimated     bool
 	staticImage    image.Image
+	staticTexture  *d3d9.Texture
 	isPreprocessed bool
+	bounds         image.Rectangle
 }
 
-func NewGifAnimator(hwnd windows.HWND, imagePath string) (*Animator, error) {
+func NewGPUAnimator(device *d3d9.Device, imagePath string) (*Animator, error) {
 	imageBytes, err := os.ReadFile(imagePath)
 	if err != nil {
 		return nil, err
 	}
 
 	if len(imageBytes) > 3 && string(imageBytes[:3]) == "GIF" {
-		return loadGifAnimation(hwnd, imageBytes)
+		return loadGPUGifAnimation(device, imageBytes)
 	}
-	return loadStaticImage(hwnd, imageBytes)
+	return loadGPUStaticImage(device, imageBytes)
 }
 
-func loadGifAnimation(hwnd windows.HWND, imageBytes []byte) (*Animator, error) {
+func loadGPUGifAnimation(device *d3d9.Device, imageBytes []byte) (*Animator, error) {
 	gifImg, err := gif.DecodeAll(bytes.NewReader(imageBytes))
 	if err != nil {
 		return nil, err
 	}
 
 	animator := &Animator{
-		hwnd:           hwnd,
+		device:         device,
 		frames:         make([]image.Image, len(gifImg.Image)),
+		textures:       make([]*d3d9.Texture, len(gifImg.Image)),
 		delays:         make([]int, len(gifImg.Image)),
 		currentFrame:   0,
 		done:           make(chan bool),
 		isAnimated:     true,
 		isPreprocessed: false,
+		bounds:         gifImg.Image[0].Bounds(),
 	}
 
 	bounds := gifImg.Image[0].Bounds()
@@ -74,43 +82,166 @@ func loadGifAnimation(hwnd windows.HWND, imageBytes []byte) (*Animator, error) {
 		animator.frames[i] = frameImg
 	}
 
+	if device != nil {
+		for i, frame := range animator.frames {
+			texture, err := animator.createTextureFromImage(frame)
+			if err != nil {
+				for j := 0; j < i; j++ {
+					if animator.textures[j] != nil {
+						animator.textures[j].Release()
+					}
+				}
+				return nil, err
+			}
+			animator.textures[i] = texture
+		}
+	}
+
 	return animator, nil
 }
 
-func loadStaticImage(hwnd windows.HWND, imageBytes []byte) (*Animator, error) {
+func loadGPUStaticImage(device *d3d9.Device, imageBytes []byte) (*Animator, error) {
 	img, _, err := image.Decode(bytes.NewReader(imageBytes))
 	if err != nil {
 		return nil, err
 	}
 
-	return &Animator{
-		hwnd:           hwnd,
+	animator := &Animator{
+		device:         device,
 		staticImage:    img,
 		isAnimated:     false,
 		done:           make(chan bool),
 		isPreprocessed: false,
-	}, nil
+		bounds:         img.Bounds(),
+	}
+
+	if device != nil {
+		texture, err := animator.createTextureFromImage(img)
+		if err != nil {
+			return nil, err
+		}
+		animator.staticTexture = texture
+	}
+
+	return animator, nil
 }
 
-func (a *Animator) Preprocess(s *Render, do func(*Render, image.Image) image.Image) {
+func (a *Animator) SetDevice(device *d3d9.Device) {
+	a.device = device
+
+	a.cleanupTextures()
+
+	if !a.isAnimated {
+		if a.staticImage != nil {
+			texture, err := a.createTextureFromImage(a.staticImage)
+			if err == nil {
+				a.staticTexture = texture
+			}
+		}
+	} else {
+		a.textures = make([]*d3d9.Texture, len(a.frames))
+		for i, frame := range a.frames {
+			texture, err := a.createTextureFromImage(frame)
+			if err == nil {
+				a.textures[i] = texture
+			}
+		}
+	}
+}
+
+func (a *Animator) createTextureFromImage(img image.Image) (*d3d9.Texture, error) {
+	if a.device == nil {
+		return nil, nil
+	}
+
+	bounds := img.Bounds()
+	width, height := bounds.Dx(), bounds.Dy()
+
+	rgba := image.NewRGBA(bounds)
+	draw.Draw(rgba, bounds, img, bounds.Min, draw.Src)
+
+	texture, err := a.device.CreateTexture(
+		uint(width),
+		uint(height),
+		1,
+		0,
+		d3d9.FMT_A8R8G8B8,
+		d3d9.POOL_MANAGED,
+		0,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	lockedRect, err := texture.LockRect(0, nil, 0)
+	if err != nil {
+		texture.Release()
+		return nil, err
+	}
+
+	pitch := lockedRect.Pitch
+	pBits := lockedRect.PBits
+
+	for y := 0; y < height; y++ {
+		for x := 0; x < width; x++ {
+			srcOffset := (y*rgba.Stride + x*4)
+			dstOffset := y*int(pitch) + x*4
+
+			if srcOffset+3 < len(rgba.Pix) && dstOffset+3 < int(lockedRect.Pitch)*height {
+				r := rgba.Pix[srcOffset+0]
+				g := rgba.Pix[srcOffset+1]
+				b := rgba.Pix[srcOffset+2]
+				a := rgba.Pix[srcOffset+3]
+
+				size := width * height * 4
+				pixels := unsafe.Slice((*byte)(unsafe.Pointer(pBits)), size)
+				pixels[dstOffset+0] = b
+				pixels[dstOffset+1] = g
+				pixels[dstOffset+2] = r
+				pixels[dstOffset+3] = a
+			}
+		}
+	}
+
+	texture.UnlockRect(0)
+	return texture, nil
+}
+
+func (a *Animator) Preprocess(s *Render) {
 	if a.isPreprocessed {
 		return
 	}
+	a.cleanupTextures()
 
 	if !a.isAnimated {
-		a.staticImage = do(s, a.staticImage)
+		if a.staticImage != nil {
+			if a.device != nil {
+				texture, err := a.createTextureFromImage(a.staticImage)
+				if err == nil {
+					a.staticTexture = texture
+				}
+			}
+		}
 	} else {
+		a.textures = make([]*d3d9.Texture, len(a.frames))
 		for i, frame := range a.frames {
-			a.frames[i] = do(s, frame)
+			a.frames[i] = frame
+
+			if a.device != nil {
+				texture, err := a.createTextureFromImage(frame)
+				if err == nil {
+					a.textures[i] = texture
+				}
+			}
 		}
 	}
 
 	a.isPreprocessed = true
 }
 
-func (a *Animator) GetCurrentImage(s *Render, do func(*Render, image.Image) image.Image) image.Image {
+func (a *Animator) GetCurrentImage(s *Render) image.Image {
 	if !a.isPreprocessed {
-		a.Preprocess(s, do)
+		a.Preprocess(s)
 	}
 
 	if !a.isAnimated {
@@ -122,6 +253,22 @@ func (a *Animator) GetCurrentImage(s *Render, do func(*Render, image.Image) imag
 	}
 
 	return a.frames[a.currentFrame]
+}
+
+func (a *Animator) GetCurrentTexture() *d3d9.Texture {
+	if !a.isAnimated {
+		return a.staticTexture
+	}
+
+	if len(a.textures) == 0 || a.currentFrame >= len(a.textures) {
+		return nil
+	}
+
+	return a.textures[a.currentFrame]
+}
+
+func (a *Animator) GetCurrentBounds() image.Rectangle {
+	return a.bounds
 }
 
 func (a *Animator) GetCurrentImageRaw() image.Image {
@@ -165,7 +312,28 @@ func (a *Animator) Start() {
 }
 
 func (a *Animator) Stop() {
-	close(a.done)
+	if a.done != nil {
+		close(a.done)
+	}
+}
+
+func (a *Animator) cleanupTextures() {
+	if a.staticTexture != nil {
+		a.staticTexture.Release()
+		a.staticTexture = nil
+	}
+
+	for i, texture := range a.textures {
+		if texture != nil {
+			texture.Release()
+			a.textures[i] = nil
+		}
+	}
+}
+
+func (a *Animator) Cleanup() {
+	a.Stop()
+	a.cleanupTextures()
 }
 
 func (a *Animator) IsAnimated() bool {
