@@ -16,18 +16,24 @@ import (
 )
 
 type Animator struct {
-	hwnd           windows.HWND
-	device         *d3d9.Device
-	textures       []*d3d9.Texture
-	frames         []image.Image
-	delays         []int
-	currentFrame   int
-	done           chan bool
-	isAnimated     bool
-	staticImage    image.Image
-	staticTexture  *d3d9.Texture
-	isPreprocessed bool
-	bounds         image.Rectangle
+	hwnd              windows.HWND
+	device            *d3d9.Device
+	textures          []*d3d9.Texture
+	frames            []image.Image
+	delays            []int
+	currentFrame      int
+	done              chan bool
+	isAnimated        bool
+	staticImage       image.Image
+	staticTexture     *d3d9.Texture
+	isPreprocessed    bool
+	bounds            image.Rectangle
+	processedBounds   image.Rectangle
+	processFunc       func(*Render, image.Image) image.Image
+	render            *Render
+	needsUpdate       bool
+	processedTextures []*d3d9.Texture
+	processedStatic   *d3d9.Texture
 }
 
 func NewGPUAnimator(device *d3d9.Device, imagePath string) (*Animator, error) {
@@ -49,15 +55,17 @@ func loadGPUGifAnimation(device *d3d9.Device, imageBytes []byte) (*Animator, err
 	}
 
 	animator := &Animator{
-		device:         device,
-		frames:         make([]image.Image, len(gifImg.Image)),
-		textures:       make([]*d3d9.Texture, len(gifImg.Image)),
-		delays:         make([]int, len(gifImg.Image)),
-		currentFrame:   0,
-		done:           make(chan bool),
-		isAnimated:     true,
-		isPreprocessed: false,
-		bounds:         gifImg.Image[0].Bounds(),
+		device:            device,
+		frames:            make([]image.Image, len(gifImg.Image)),
+		textures:          make([]*d3d9.Texture, len(gifImg.Image)),
+		processedTextures: make([]*d3d9.Texture, len(gifImg.Image)),
+		delays:            make([]int, len(gifImg.Image)),
+		currentFrame:      0,
+		done:              make(chan bool),
+		isAnimated:        true,
+		isPreprocessed:    false,
+		bounds:            gifImg.Image[0].Bounds(),
+		needsUpdate:       true,
 	}
 
 	bounds := gifImg.Image[0].Bounds()
@@ -113,6 +121,7 @@ func loadGPUStaticImage(device *d3d9.Device, imageBytes []byte) (*Animator, erro
 		done:           make(chan bool),
 		isPreprocessed: false,
 		bounds:         img.Bounds(),
+		needsUpdate:    true,
 	}
 
 	if device != nil {
@@ -126,10 +135,20 @@ func loadGPUStaticImage(device *d3d9.Device, imageBytes []byte) (*Animator, erro
 	return animator, nil
 }
 
-func (a *Animator) SetDevice(device *d3d9.Device) {
+func (a *Animator) SetProcessor(processFunc func(*Render, image.Image) image.Image, render *Render) {
+	a.processFunc = processFunc
+	a.render = render
+	a.needsUpdate = true
+}
+
+func (a *Animator) SetDevice(device *d3d9.Device, do func(*Render, image.Image) image.Image, r *Render) {
 	a.device = device
+	a.processFunc = do
+	a.render = r
+	a.needsUpdate = true
 
 	a.cleanupTextures()
+	a.cleanupProcessedTextures()
 
 	if !a.isAnimated {
 		if a.staticImage != nil {
@@ -140,6 +159,7 @@ func (a *Animator) SetDevice(device *d3d9.Device) {
 		}
 	} else {
 		a.textures = make([]*d3d9.Texture, len(a.frames))
+		a.processedTextures = make([]*d3d9.Texture, len(a.frames))
 		for i, frame := range a.frames {
 			texture, err := a.createTextureFromImage(frame)
 			if err == nil {
@@ -244,18 +264,34 @@ func (a *Animator) GetCurrentImage(s *Render) image.Image {
 		a.Preprocess(s)
 	}
 
+	var currentImg image.Image
 	if !a.isAnimated {
-		return a.staticImage
+		currentImg = a.staticImage
+	} else {
+		if len(a.frames) == 0 {
+			return nil
+		}
+		currentImg = a.frames[a.currentFrame]
 	}
 
-	if len(a.frames) == 0 {
-		return nil
+	if a.processFunc != nil {
+		renderToUse := s
+		if renderToUse == nil {
+			renderToUse = a.render
+		}
+		if renderToUse != nil {
+			return a.processFunc(renderToUse, currentImg)
+		}
 	}
 
-	return a.frames[a.currentFrame]
+	return currentImg
 }
 
 func (a *Animator) GetCurrentTexture() *d3d9.Texture {
+	if a.processFunc != nil && a.render != nil {
+		return a.getProcessedTexture()
+	}
+
 	if !a.isAnimated {
 		return a.staticTexture
 	}
@@ -267,7 +303,56 @@ func (a *Animator) GetCurrentTexture() *d3d9.Texture {
 	return a.textures[a.currentFrame]
 }
 
+func (a *Animator) getProcessedTexture() *d3d9.Texture {
+	if a.device == nil || a.processFunc == nil || a.render == nil {
+		return nil
+	}
+
+	var originalImg image.Image
+	if !a.isAnimated {
+		originalImg = a.staticImage
+	} else {
+		if len(a.frames) == 0 || a.currentFrame >= len(a.frames) {
+			return nil
+		}
+		originalImg = a.frames[a.currentFrame]
+	}
+
+	if originalImg == nil {
+		return nil
+	}
+
+	processedImg := a.processFunc(a.render, originalImg)
+	if processedImg == nil {
+		return nil
+	}
+
+	texture, err := a.createTextureFromImage(processedImg)
+	if err != nil {
+		return nil
+	}
+
+	if !a.isAnimated {
+		if a.processedStatic != nil {
+			a.processedStatic.Release()
+		}
+		a.processedStatic = texture
+	} else {
+		if a.processedTextures[a.currentFrame] != nil {
+			a.processedTextures[a.currentFrame].Release()
+		}
+		a.processedTextures[a.currentFrame] = texture
+	}
+
+	a.processedBounds = processedImg.Bounds()
+
+	return texture
+}
+
 func (a *Animator) GetCurrentBounds() image.Rectangle {
+	if a.processFunc != nil && !a.processedBounds.Empty() {
+		return a.processedBounds
+	}
 	return a.bounds
 }
 
@@ -286,6 +371,7 @@ func (a *Animator) GetCurrentImageRaw() image.Image {
 func (a *Animator) NextFrame() {
 	if a.isAnimated && len(a.frames) > 1 {
 		a.currentFrame = (a.currentFrame + 1) % len(a.frames)
+		a.needsUpdate = true
 	}
 }
 
@@ -331,9 +417,24 @@ func (a *Animator) cleanupTextures() {
 	}
 }
 
+func (a *Animator) cleanupProcessedTextures() {
+	if a.processedStatic != nil {
+		a.processedStatic.Release()
+		a.processedStatic = nil
+	}
+
+	for i, texture := range a.processedTextures {
+		if texture != nil {
+			texture.Release()
+			a.processedTextures[i] = nil
+		}
+	}
+}
+
 func (a *Animator) Cleanup() {
 	a.Stop()
 	a.cleanupTextures()
+	a.cleanupProcessedTextures()
 }
 
 func (a *Animator) IsAnimated() bool {
@@ -346,4 +447,15 @@ func (a *Animator) IsPreprocessed() bool {
 
 func (a *Animator) ResetPreprocessing() {
 	a.isPreprocessed = false
+	a.needsUpdate = true
+}
+
+func (a *Animator) HasProcessor() bool {
+	return a.processFunc != nil && a.render != nil
+}
+
+func (a *Animator) RemoveProcessor() {
+	a.processFunc = nil
+	a.render = nil
+	a.cleanupProcessedTextures()
 }

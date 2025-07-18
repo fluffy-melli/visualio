@@ -3,13 +3,16 @@ package main
 import (
 	"context"
 	"fmt"
+	"image"
 	_ "image/jpeg"
 	_ "image/png"
 
 	"github.com/fluffy-melli/visualio/config"
 	"github.com/fluffy-melli/visualio/cursor"
 	"github.com/fluffy-melli/visualio/graphics"
+	"github.com/fluffy-melli/visualio/images"
 	"github.com/fluffy-melli/visualio/log"
+	"github.com/fluffy-melli/visualio/strings"
 	"github.com/fluffy-melli/visualio/update"
 )
 
@@ -50,6 +53,16 @@ func main() {
 		}
 	}
 
+	Xunit, found := strings.ExtractNumber(configs.ImageResize.Width)
+	if !found {
+		logs.Panic("X resize value not found")
+	}
+
+	Yunit, found := strings.ExtractNumber(configs.ImageResize.Height)
+	if !found {
+		logs.Panic("Y resize value not found")
+	}
+
 	screen := graphics.NewScreen()
 
 	screen.AX = configs.ImagePosition.X
@@ -62,6 +75,26 @@ func main() {
 	}
 
 	screen.OnDownMButton = func(r *graphics.Render) {}
+
+	screen.OnImage = func(r *graphics.Render, i image.Image) image.Image {
+		bounds := i.Bounds()
+
+		var newWidth, newHeight int
+
+		if Xunit.Unit == "%" {
+			newWidth = int(float64(bounds.Dx()) * Xunit.Value / 100.0)
+		} else {
+			newWidth = int(Xunit.Value)
+		}
+
+		if Yunit.Unit == "%" {
+			newHeight = int(float64(bounds.Dy()) * Yunit.Value / 100.0)
+		} else {
+			newHeight = int(Yunit.Value)
+		}
+
+		return images.Resize(i, newWidth, newHeight)
+	}
 
 	position := make(chan cursor.Location)
 

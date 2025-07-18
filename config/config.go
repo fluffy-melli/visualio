@@ -20,10 +20,16 @@ type ImagePosition struct {
 	Y int `toml:"y"`
 }
 
+type ImageResize struct {
+	Width  string `toml:"width"`
+	Height string `toml:"height"`
+}
+
 type Config struct {
 	App           App           `toml:"app"`
 	Image         Image         `toml:"image"`
 	ImagePosition ImagePosition `toml:"image-position"`
+	ImageResize   ImageResize   `toml:"image-resize"`
 }
 
 func Load(configPath string) (*Config, error) {

@@ -87,6 +87,7 @@ type Render struct {
 	quadVertices  []CUSTOM_VERTEX
 	OnDownMButton func(*Render)
 	OnUpMButton   func(*Render)
+	OnImage       func(*Render, image.Image) image.Image
 }
 
 type Rect struct {
@@ -462,7 +463,7 @@ func (s *Render) CreateWindow(className, imagePath string) error {
 		s.initialized = false
 	}
 
-	s.animator.SetDevice(s.device)
+	s.animator.SetDevice(s.device, s.OnImage, s)
 
 	constants.ProcSetWindowPos.Call(uintptr(s.window), ^uintptr(0), 0, 0, 0, 0, 0x0001|0x0002|0x0010)
 	constants.ProcSetLayeredWindowAttributes.Call(uintptr(s.window), constants.TRANSPARENT_COLOR, 255, constants.LWA_COLORKEY|constants.LWA_ALPHA)
